@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Live Transcription</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 20px;
+            padding: 40px;
+            max-width: 800px;
+            width: 100%;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+        }
+
+        h1 {
+            text-align: center;
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 2em;
+        }
+
+        .status {
+            text-align: center;
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 14px;
+        }
+
+        .status.connected {
+            color: #10b981;
+        }
+
+        .status.error {
+            color: #ef4444;
+        }
+
+        .controls {
+            display: flex;
+            justify-content: center;
+            margin-bottom: 30px;
+        }
+
+        .mic-button {
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            border: none;
+            background: #667eea;
+            color: white;
+            font-size: 32px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .mic-button:hover {
+            transform: scale(1.05);
+            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.6);
+        }
+
+        .mic-button.recording {
+            background: #ef4444;
+            animation: pulse 1.5s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% {
+                box-shadow: 0 4px 15px rgba(239, 68, 68, 0.4);
+            }
+            50% {
+                box-shadow: 0 4px 30px rgba(239, 68, 68, 0.8);
+            }
+        }
+
+        .mic-button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .transcription-container {
+            background: #f9fafb;
+            border-radius: 12px;
+            padding: 20px;
+            min-height: 300px;
+            max-height: 500px;
+            overflow-y: auto;
+        }
+
+        .transcription-text {
+            color: #1f2937;
+            line-height: 1.8;
+            font-size: 16px;
+        }
+
+        .transcription-text p {
+            margin-bottom: 15px;
+            padding: 10px;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+        }
+
+        .transcription-text p:last-child {
+            animation: fadeIn 0.3s ease;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .empty-state {
+            text-align: center;
+            color: #9ca3af;
+            padding: 60px 20px;
+            font-size: 16px;
+        }
+
+        .clear-button {
+            margin-top: 20px;
+            padding: 10px 20px;
+            background: #6b7280;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background 0.2s;
+            display: block;
+            margin-left: auto;
+            margin-right: auto;
+        }
+
+        .clear-button:hover {
+            background: #4b5563;
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>🎤 Live Transcription</h1>
+    <div class="status" id="status">Connecting to server...</div>
+
+    <div class="controls">
+        <button class="mic-button" id="micButton" disabled>
+            🎤
+        </button>
+    </div>
+
+    <div class="transcription-container">
+        <div class="transcription-text" id="transcriptionText">
+            <div class="empty-state">
+                Press the microphone button to start recording.<br>
+                Speak naturally and pause between sentences.
+            </div>
+        </div>
+    </div>
+
+    <button class="clear-button" id="clearButton">Clear Transcription</button>
+</div>
+
+<script>
+    let ws = null;
+    let mediaStream = null;
+    let audioContext = null;
+    let audioWorkletNode = null;
+    let isRecording = false;
+    let transcriptions = [];
+
+    const micButton = document.getElementById('micButton');
+    const statusElement = document.getElementById('status');
+    const transcriptionText = document.getElementById('transcriptionText');
+    const clearButton = document.getElementById('clearButton');
+
+    // Connect to WebSocket server
+    function connectWebSocket() {
+        ws = new WebSocket('ws://localhost:8765');
+
+        ws.onopen = () => {
+            console.log('Connected to server');
+            statusElement.textContent = 'Connected - Ready to transcribe';
+            statusElement.className = 'status connected';
+            micButton.disabled = false;
+        };
+
+        ws.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+
+            if (data.type === 'transcription' && data.text) {
+                addTranscription(data.text);
+            } else if (data.type === 'status') {
+                console.log('Status:', data.message);
+            } else if (data.type === 'error') {
+                console.error('Server error:', data.message);
+                statusElement.textContent = 'Error: ' + data.message;
+                statusElement.className = 'status error';
+            }
+        };
+
+        ws.onerror = (error) => {
+            console.error('WebSocket error:', error);
+            statusElement.textContent = 'Connection error';
+            statusElement.className = 'status error';
+        };
+
+        ws.onclose = () => {
+            console.log('Disconnected from server');
+            statusElement.textContent = 'Disconnected - Reconnecting...';
+            statusElement.className = 'status error';
+            micButton.disabled = true;
+
+            // Reconnect after 3 seconds
+
+            // --------------
+            setTimeout(connectWebSocket, 3000);
+        };
+    }
+
+    // Add transcription to display
+    function addTranscription(text) {
+        if (text.trim()) {
+            transcriptions.push(text.trim());
+            updateTranscriptionDisplay();
+        }
+    }
+
+    // Update transcription display
+    function updateTranscriptionDisplay() {
+        if (transcriptions.length === 0) {
+            transcriptionText.innerHTML = `
+            <div class="empty-state">
+                Press the microphone button to start recording.<br>
+                Speak naturally and pause between sentences.
+            </div>
+        `;
+        } else {
+            transcriptionText.textContent = transcriptions.join(' '); // append sentences with space
+
+            // Scroll to bottom
+            transcriptionText.parentElement.scrollTop = transcriptionText.parentElement.scrollHeight;
+        }
+    }
+
+
+    // Audio processor using MediaRecorder
+    async function startRecording() {
+        try {
+            mediaStream = await navigator.mediaDevices.getUserMedia({
+                audio: {
+                    channelCount: 1,
+                    sampleRate: 16000,
+                    echoCancellation: true,
+                    noiseSuppression: true,
+                    autoGainControl: true
+                }
+            });
+
+            // Create audio context
+            audioContext = new AudioContext({ sampleRate: 16000 });
+            const source = audioContext.createMediaStreamSource(mediaStream);
+
+            // Create a processor
+            const bufferSize = 4096;
+            const processor = audioContext.createScriptProcessor(bufferSize, 1, 1);
+
+            processor.onaudioprocess = (e) => {
+                if (!isRecording || !ws || ws.readyState !== WebSocket.OPEN) return;
+
+                const inputData = e.inputBuffer.getChannelData(0);
+                const outputData = new Int16Array(inputData.length);
+
+                // Convert float32 to int16
+                for (let i = 0; i < inputData.length; i++) {
+                    const s = Math.max(-1, Math.min(1, inputData[i]));
+                    outputData[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+                }
+
+                // Send audio data to server
+                ws.send(outputData.buffer);
+            };
+
+            // Connect nodes
+            source.connect(processor);
+            processor.connect(audioContext.destination);
+
+            // Store for cleanup
+            audioWorkletNode = processor;
+            isRecording = true;
+            micButton.classList.add('recording');
+            statusElement.textContent = 'Recording... Speak naturally';
+
+            // Send start signal
+            ws.send(JSON.stringify({ type: 'start' }));
+
+        } catch (error) {
+            console.error('Error accessing microphone:', error);
+            alert('Error accessing microphone. Please allow microphone access and use HTTPS or localhost.');
+            stopRecording();
+        }
+    }
+
+    // Stop recording
+    function stopRecording() {
+        isRecording = false;
+        micButton.classList.remove('recording');
+        statusElement.textContent = 'Connected - Ready to transcribe';
+        statusElement.className = 'status connected';
+
+        // Send stop signal
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'stop' }));
+        }
+
+        // Cleanup audio nodes
+        if (audioWorkletNode) {
+            try {
+                audioWorkletNode.disconnect();
+            } catch (e) {}
+            audioWorkletNode = null;
+        }
+
+        // Close audio context
+        if (audioContext) {
+            try {
+                audioContext.close();
+            } catch (e) {}
+            audioContext = null;
+        }
+
+        // Stop media stream
+        if (mediaStream) {
+            mediaStream.getTracks().forEach(track => track.stop());
+            mediaStream = null;
+        }
+    }
+
+    // Mic button click handler
+    micButton.addEventListener('click', () => {
+
+        // ----------------
+        if (!ws || ws.readyState !== WebSocket.OPEN) {
+            // Only connect when mic is pressed
+            // micButton.disabled = false;
+            connectWebSocket();
+        }
+        // ---------
+
+        if (isRecording) {
+            stopRecording();
+        } else {
+            startRecording();
+        }
+    });
+
+    // Clear button click handler
+    clearButton.addEventListener('click', () => {
+        transcriptions = [];
+        updateTranscriptionDisplay();
+    });
+
+    // Connect on load
+    connectWebSocket();
+
+    // Cleanup on page unload
+    window.addEventListener('beforeunload', () => {
+        if (isRecording) {
+            stopRecording();
+        }
+        if (ws) {
+            ws.close();
+        }
+    });
+</script>
+</body>
+</html>
