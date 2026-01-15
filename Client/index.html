@@ -201,7 +201,7 @@
 
     // Connect to WebSocket server
     function connectWebSocket() {
-        ws = new WebSocket('ws://localhost:8765');
+        ws = new WebSocket('https://transcriptor-production-6b9c.up.railway.app/');
 
         ws.onopen = () => {
             console.log('Connected to server');
